@@ -8,6 +8,8 @@
 	.ЗависитОт("opm")
 	.ЗависитОт("gitrunner")
 	.ЗависитОт("fs")
+	.ЗависитОт("restler")
+	.ЗависитОт("semver")
 	.ЗависитОт("tempfiles")
 	.ЗависитОт("cli", "0.9.7")
 	.ИсполняемыйФайл("src/cmd/os-github-installer.os", "os-github-installer")
