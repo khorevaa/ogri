@@ -1,0 +1,405 @@
+#!/bin/bash
+
+export PLATFORM
+
+has() {
+    which "$1" >/dev/null 2>&1
+    return $?
+}
+
+ink() {
+    if [ "$#" -eq 0 -o "$#" -gt 2 ]; then
+        return 1
+    fi
+
+    local open="\033["
+    local close="${open}0m"
+    local black="0;30m"
+    local red="1;31m"
+    local green="1;32m"
+    local yellow="1;33m"
+    local blue="1;34m"
+    local purple="1;35m"
+    local cyan="1;36m"
+    local gray="0;37m"
+    local white="$close"
+
+    local text="$1"
+    local color="$close"
+
+    if [ "$#" -eq 2 ]; then
+        text="$2"
+        case "$1" in
+            black | red | green | yellow | blue | purple | cyan | gray | white)
+                eval color="\$$1"
+                ;;
+        esac
+    fi
+
+    printf "${open}${color}${text}${close}"
+}
+
+log() {
+    if [ "$#" -eq 0 -o "$#" -gt 2 ]; then
+        return 1
+    fi
+
+    local color=
+    local text="$2"
+
+    case "$1" in
+        TITLE)
+            color=yellow
+            ;;
+        ERROR | WARN)
+            color=red
+            ;;
+        INFO)
+            color=green
+            ;;
+        SUCCESS)
+            color=green
+            ;;
+        *)
+            text="$1"
+    esac
+
+    timestamp() {
+        ink gray "["
+        ink purple "$(date +%H:%M:%S)"
+        ink gray "] "
+    }
+
+    timestamp; ink "$color" "$text"; echo
+}
+
+ok() {
+    log SUCCESS "$1"
+}
+
+die() {
+    log ERROR "$1" 1>&2
+}
+
+lower() {
+    if [ $# -eq 0 ]; then
+        cat <&0
+    elif [ $# -eq 1 ]; then
+        if [ -f "$1" -a -r "$1" ]; then
+            cat "$1"
+        else
+            echo "$1"
+        fi
+    else
+        return 1
+    fi | tr "[:upper:]" "[:lower:]"
+}
+
+ostype() {
+    uname | lower
+}
+
+# os_detect export the PLATFORM variable as you see fit
+os_detect() {
+    export PLATFORM
+    case "$(ostype)" in
+        *'linux'*)  PLATFORM='linux'   ;;
+        *'darwin'*) PLATFORM='darwin'  ;;
+        *'bsd'*)    PLATFORM='bsd'     ;;
+        *)          PLATFORM='unknown' ;;
+    esac
+}
+
+install_ospx() {
+    if [ -f "$1" ] ; then
+        case "$1" in
+            *.ospx) opm install -f "$1" ;;
+            # *.tar.gz)  tar xvzf   "$1" ;;
+            *)         return 1        ;;
+        esac
+    else
+        echo "Отсутствует файл" 1>&2
+        return 1
+    fi
+}
+
+extract() {
+    if [ -f "$1" ] ; then
+        case "$1" in
+            *.tar.bz2) tar xvjf   "$1" ;;
+            *.tar.gz)  tar xvzf   "$1" ;;
+            *.bz2)     bunzip2    "$1" ;;
+            *.rar)     unrar x    "$1" ;;
+            *.gz)      gunzip     "$1" ;;
+            *.tar)     tar xvf    "$1" ;;
+            *.tbz2)    tar xvjf   "$1" ;;
+            *.tgz)     tar xvzf   "$1" ;;
+            *.zip)     unzip      "$1" ;;
+            *.Z)       uncompress "$1" ;;
+            *.7z)      7z x       "$1" ;;
+            *)         return 1        ;;
+        esac
+    else
+        echo "Отсутствует файл" 1>&2
+        return 1
+    fi
+}
+
+check_dependencies() {
+    local err
+    err=0
+
+    sleep 1
+
+    if ! has "wget"; then
+        err=1
+        die "wget: не найден"
+    fi
+
+    if ! has "mono"; then
+        err=1
+        die "mono: не найден"
+    fi
+
+    if ! has "curl"; then
+        err=1
+        die "curl: не найден"
+    fi
+
+    if [ "$err" -ne 0 ]; then
+        exit 1
+    fi
+}
+
+check_oscript() {
+    local err
+    err=0
+
+    sleep 1
+
+    if ! has "oscript"; then
+        err=1
+        die "oscript: не найден"
+    fi
+
+    if [ "$err" -ne 0 ]; then
+        exit 1
+    fi
+}
+
+check_opm() {
+    local err
+    err=0
+
+    sleep 1
+
+    if ! has "opm"; then
+        err=1
+        die "opm: не найден"
+    fi
+
+    if [ "$err" -ne 0 ]; then
+        exit 1
+    fi
+}
+
+make_mono_script() {
+
+      local script_name 
+      script_name=$1/$2.sh
+    cat > $script_name <<-EOF 
+    #!/bin/bash
+    mono $3
+EOF
+    
+    echo $script_name
+
+}
+
+main() {
+    log TITLE "== Начало установки =="
+
+    # check dependencies
+    check_dependencies
+
+    log INFO "Проверка и установка зависимостей..."
+    sleep 1
+    local_repo=$1
+    
+    GITHUB_REPO="${local_repo:-$GITHUB_REPO}"
+    
+    log INFO "Установка из репозитория $GITHUB_REPO"
+     
+    # include blank $L and check user/repo
+    echo "$GITHUB_REPO" | grep -q "^[A-Za-z0-9_-]\+/[A-Za-z0-9_-]\+$"
+    if [ $? -ne 0 ]; then
+        die "Необходимо установить переменную GITHUB_REPO в формете URL (username/reponame) откуда производить установку"
+        exit 1
+    fi
+
+    USER="$(echo "$GITHUB_REPO" | awk -F"/" '{print $1}')"
+    REPO="$(echo "$GITHUB_REPO" | awk -F"/" '{print $2}')"
+
+    # detect os
+    os_detect
+    cd /tmp
+
+    local releases i path bin re ok 
+    # echo $PATH
+    
+    # # listpath="$(${'$PATH'//:/ })"
+    
+    # echo $listpath
+    # exit
+    # Same as
+    # curl --fail -X GET https://api.github.com/repos/b4b4r07/gomi/releases/latest | jq '.assets[0].browser_download_url' | xargs curl -L -O
+    # http://stackoverflow.com/questions/24987542/is-there-a-link-to-github-for-downloading-a-file-in-the-latest-release-of-a-repo
+    # http://stackoverflow.com/questions/18384873/how-to-list-the-releases-of-a-repository
+    # http://stackoverflow.com/questions/5207269/releasing-a-build-artifact-on-github
+    #if has "jq"; then
+    #    curl --fail -X GET https://api.github.com/repos/b4b4r07/gomi/releases/latest | jq -r '.assets[].browser_download_url' | grep $PLATFORM | wget -i -
+    #fi
+
+    log INFO "Получение информации о последнем релизе...\n"
+    releases="$(curl -sSf -L https://github.com/"${USER}"/"${REPO}"/releases/latest \
+        | grep -o '/'"${USER}"'/'"${REPO}"'/releases/download/[^"]*')"
+
+    # github releases not available
+    if [ -z "$releases" ]; then
+        die " Не обнаружены доступный к скачиванию пакетов из последнего релиза"
+        exit 1
+    fi
+
+    # download github releases for USER's platform
+    log INFO "Скачиваю пакет $releases\n"
+    echo "$releases" | wget -q --base=http://github.com/ -i -
+
+    # Main processing
+    #
+    # check machine architecture
+    ok=0
+    re=$(uname -m | grep -o "..$")
+    for i in $releases
+    do
+        bin="$(basename "$i")"
+        if [ -n "$bin" -a -f "$bin" ]; then
+            
+            case "$bin" in
+                    *.ospx) #Установка пакета ospx
+                    log INFO "Устанавливаю ${bin}..."
+                    if install_ospx "$bin" 2>/dev/null; then
+                        if [ -f "$REPO" -a -x "$REPO" ]; then
+                            # do nothing
+                            bin=""
+                        else
+                            dir="$(ls -1 -F | grep "$REPO" | grep "/$" | head)"
+                            if [ -z "$dir" ]; then
+                                die "$REPO: not found"
+                                exit 1
+                            fi
+
+                            if [ -f "$dir/$REPO" -a -x "$dir/$REPO" ]; then
+                                bin="$dir/$REPO"
+                            fi
+                        fi
+                    else
+                        log ERROR "Установка ${bin} завершилась с ошибкой"
+                        ok=0
+                        break
+                    fi;;
+                    *.exe) #Установка exe
+                    # log ERROR "Установка exe не реализована"
+                    # # Make a copy of REPO and rename to REPO
+                    bin_path=$HOME/.local/share/"$REPO"
+                    mkdir -p bin_path
+                    local_bin="$bin_path/$REPO"
+
+                    cp "$bin" "$local_bin" 2>/dev/null
+                    
+                    MONO_SCRIPT=$(make_mono_script $bin_path $REPO $local_bin) 
+                    
+                    chmod +x "$MONO_SCRIPT"
+
+                    # log INFO "Установка в каталог bin..."
+                        
+                    path="$HOME/.local/bin"
+                    # Find the directory that you can install from $PATH
+                    # for path in $listpath
+                    # do
+                        log INFO "Установка в $path..."
+                        cp "$MONO_SCRIPT" "$path/$REPO" >/dev/null 2>&1
+                        if [ $? -eq 0 ]; then
+                            chmod +x "$path/$REPO"
+
+                            ok "Установка в $MONO_SCRIPT в $path завершена"
+                            ok=1
+                            break
+                        fi
+                    # done
+                    ;;
+            esac
+
+
+            # One binary is enough to complete this installation
+            break
+        fi
+    done
+    
+    # Cleanup!
+    # remove the intermediate files
+    # thus complete the installation
+    for i in $releases
+    do
+        rm -f "$(basename "$i")"
+    done
+
+    # no binary can execute
+    if [ $ok -eq 0 ]; then
+        die "there is no binary that can execute on this platform"
+        die "or, the all PATHs require sudoer; please add new path to the PATH"
+        exit 1
+    fi
+
+    # Notification log
+    if has "$REPO"; then
+        ok "== Завершено =="
+        # cleanup
+        rm -f "$REPO"
+    else
+        die "$REPO: incomplete or unsuccessful installations"
+        echo "please put ./$REPO to somewhere you want" 1>&2
+        echo "(on UNIX-ly systems, /usr/local/bin or the like)" 1>&2
+        echo "you should run 'mv ./$REPO /usr/local/bin' now" 1>&2
+        exit 1
+    fi
+}
+
+# if echo "$-" | grep -q "i"; then
+#     # -> source a.sh
+#     return
+
+# else
+#     # three patterns
+#     # -> cat a.sh | bash
+#     # -> bash -c "$(cat a.sh)"
+#     # -> bash a.sh
+#     if [ -z "$BASH_VERSION" ]; then
+#         die "Для установки необходим bash"
+#         exit 1
+#     fi
+
+#     if [ "$0" = "${BASH_SOURCE:-}" ]; then
+#         # -> bash a.sh
+#         exit
+#     fi
+
+#     if [ -n "${BASH_EXECUTION_STRING:-}" ] || [ -p /dev/stdin ]; then
+#         trap "die 'terminated $0:$LINENO'; exit 1" INT ERR
+#         # -> cat a.sh | bash
+#         # -> bash -c "$(cat a.sh)"
+#         main
+#     fi
+# fi
+# listpath=${PATH//:/ }
+# exit
+main khorevaa/os-github-installer
