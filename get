@@ -402,4 +402,4 @@ main() {
 # fi
 # listpath=${PATH//:/ }
 # exit
-main khorevaa/os-github-installer
+main khorevaa/ogri

@@ -1,2 +1,2 @@
-# os-github-installer
+# `O`_neScript_ `G`_ithub_ `R`_elease_ `I`_nstaller_
 Приложение для установки приложения на Oscript с релизов Github
